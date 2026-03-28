@@ -45,6 +45,11 @@ jobs:
         shell: bash
         run: npm install
 
+      - name: Generate Android project (Expo prebuild)
+        working-directory: e2e-harness
+        shell: bash
+        run: npx expo prebuild --platform android --clean
+
       - name: Enable KVM
         shell: bash
         run: |
