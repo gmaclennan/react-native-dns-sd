@@ -243,20 +243,20 @@ jobs:
           emulator -list-avds || true
 
           # Launch with QEMU extra NIC for shared multicast network
-          # Match reference repo command format exactly
+          # Use direct file redirect (not tee) to avoid tee-kills-emulator issue
           emulator @avd1 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot \
             -qemu -device virtio-net-pci,netdev=sharedlan,mac=52:54:00:12:34:56 -netdev socket,id=sharedlan,mcast=230.0.0.1:1234 \
-            2>&1 | tee emu1.log &
+            >emu1.log 2>&1 &
           EMU1_PID=$!
 
           emulator @avd2 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot \
             -qemu -device virtio-net-pci,netdev=sharedlan,mac=52:54:00:12:34:57 -netdev socket,id=sharedlan,mcast=230.0.0.1:1234 \
-            2>&1 | tee emu2.log &
+            >emu2.log 2>&1 &
           EMU2_PID=$!
 
           emulator @avd3 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot \
             -qemu -device virtio-net-pci,netdev=sharedlan,mac=52:54:00:12:34:58 -netdev socket,id=sharedlan,mcast=230.0.0.1:1234 \
-            2>&1 | tee emu3.log &
+            >emu3.log 2>&1 &
           EMU3_PID=$!
 
           echo "EMU1_PID=$EMU1_PID" >> "$GITHUB_ENV"
@@ -434,22 +434,38 @@ jobs:
       - name: Start service advertisers on emu2 and emu3
         shell: bash
         run: |
-          export PATH="$ANDROID_HOME/platform-tools:$PATH"
+          # Verify emulators are still running
+          echo "=== ADB devices before starting advertisers ==="
+          adb devices -l
+
+          # Check installed packages
+          echo "=== Packages on emu2 ==="
+          adb -s emulator-5556 shell pm list packages | grep dnssd || echo "No dnssd packages!"
+          echo "=== Packages on emu3 ==="
+          adb -s emulator-5558 shell pm list packages | grep dnssd || echo "No dnssd packages!"
 
           # Start advertising on emulator 2
-          adb -s emulator-5556 shell am start \
+          echo "Starting advertiser on emulator-5556..."
+          adb -s emulator-5556 shell am start -W \
             -n expo.modules.dnssd.test/.MainActivity \
-            --es service_name "DnsSdTest-Emulator2"
+            --es service_name "DnsSdTest-Emulator2" 2>&1
+          echo "Exit code: $?"
 
           # Start advertising on emulator 3
-          adb -s emulator-5558 shell am start \
+          echo "Starting advertiser on emulator-5558..."
+          adb -s emulator-5558 shell am start -W \
             -n expo.modules.dnssd.test/.MainActivity \
-            --es service_name "DnsSdTest-Emulator3"
+            --es service_name "DnsSdTest-Emulator3" 2>&1
+          echo "Exit code: $?"
 
           # Give services time to register
-          sleep 5
+          sleep 10
 
-          echo "Services should be advertising on emu2 and emu3"
+          # Verify services are advertising
+          echo "=== Checking logcat for service registration on emu2 ==="
+          adb -s emulator-5556 logcat -d -s "DnsSdE2ETest:*" | tail -10
+          echo "=== Checking logcat for service registration on emu3 ==="
+          adb -s emulator-5558 logcat -d -s "DnsSdE2ETest:*" | tail -10
 
       - name: Run cross-emulator tests on emu1
         shell: bash
