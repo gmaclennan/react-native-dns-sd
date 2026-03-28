@@ -163,6 +163,8 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      ANDROID_AVD_HOME: /home/runner/.config/.android/avd
     steps:
       - uses: actions/checkout@v4
 
@@ -178,89 +180,74 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Set up Android SDK
+      - name: Add Android tools to PATH
         shell: bash
         run: |
-          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
-          echo "y" | sdkmanager --install \
-            "system-images;android-30;default;x86_64" \
-            "platform-tools" \
-            "platforms;android-30" \
-            "emulator"
+          echo "$ANDROID_HOME/emulator" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install system image
+        shell: bash
+        run: |
+          echo "y" | sdkmanager --install "system-images;android-30;default;x86_64"
 
       - name: Create AVDs
         shell: bash
         run: |
-          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
           mkdir -p "$ANDROID_AVD_HOME"
-
           for i in 1 2 3; do
             echo "no" | avdmanager create avd \
-              --force --name "avd${i}" \
-              --package "system-images;android-30;default;x86_64" \
-              --device "pixel_4"
+              -n "avd${i}" \
+              -k "system-images;android-30;default;x86_64" \
+              --force
           done
 
       - name: Launch 3 emulators with shared network
         shell: bash
         run: |
-          export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
-
           echo "=== Emulator version ==="
           emulator -version || true
-
           echo "=== AVDs available ==="
           emulator -list-avds || true
 
           # Launch with QEMU extra NIC for shared multicast network
-          # Redirect stderr to log files for debugging
-          emulator @avd1 -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim \
-            -qemu \
-            -device virtio-net-pci,netdev=sharedlan,mac=52:54:00:12:34:56 \
-            -netdev socket,id=sharedlan,mcast=230.0.0.1:1234 \
-            2>emu1-stderr.log &
+          # Match reference repo command format exactly
+          emulator @avd1 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot \
+            -qemu -device virtio-net-pci,netdev=sharedlan,mac=52:54:00:12:34:56 -netdev socket,id=sharedlan,mcast=230.0.0.1:1234 \
+            2>&1 | tee emu1.log &
           EMU1_PID=$!
-          echo "Launched emu1 (PID $EMU1_PID)"
 
-          emulator @avd2 -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim \
-            -qemu \
-            -device virtio-net-pci,netdev=sharedlan,mac=52:54:00:12:34:57 \
-            -netdev socket,id=sharedlan,mcast=230.0.0.1:1234 \
-            2>emu2-stderr.log &
+          emulator @avd2 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot \
+            -qemu -device virtio-net-pci,netdev=sharedlan,mac=52:54:00:12:34:57 -netdev socket,id=sharedlan,mcast=230.0.0.1:1234 \
+            2>&1 | tee emu2.log &
           EMU2_PID=$!
-          echo "Launched emu2 (PID $EMU2_PID)"
 
-          emulator @avd3 -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim \
-            -qemu \
-            -device virtio-net-pci,netdev=sharedlan,mac=52:54:00:12:34:58 \
-            -netdev socket,id=sharedlan,mcast=230.0.0.1:1234 \
-            2>emu3-stderr.log &
+          emulator @avd3 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot \
+            -qemu -device virtio-net-pci,netdev=sharedlan,mac=52:54:00:12:34:58 -netdev socket,id=sharedlan,mcast=230.0.0.1:1234 \
+            2>&1 | tee emu3.log &
           EMU3_PID=$!
-          echo "Launched emu3 (PID $EMU3_PID)"
 
           echo "EMU1_PID=$EMU1_PID" >> "$GITHUB_ENV"
           echo "EMU2_PID=$EMU2_PID" >> "$GITHUB_ENV"
           echo "EMU3_PID=$EMU3_PID" >> "$GITHUB_ENV"
 
-          # Give emulators time to start their ADB connections
-          sleep 15
+          sleep 10
 
-          # Check if emulators are still running
+          # Check emulators are still running
           for pid in $EMU1_PID $EMU2_PID $EMU3_PID; do
             if kill -0 "$pid" 2>/dev/null; then
               echo "PID $pid is running"
             else
-              echo "WARNING: PID $pid is NOT running!"
+              echo "ERROR: PID $pid crashed!"
+              echo "=== emu logs ==="
+              cat emu1.log emu2.log emu3.log 2>/dev/null || true
+              exit 1
             fi
           done
-
-          # Show any early errors
-          echo "=== emu1 stderr (first 30 lines) ==="
-          head -30 emu1-stderr.log 2>/dev/null || true
-          echo "=== emu2 stderr (first 30 lines) ==="
-          head -30 emu2-stderr.log 2>/dev/null || true
-          echo "=== emu3 stderr (first 30 lines) ==="
-          head -30 emu3-stderr.log 2>/dev/null || true
 
           echo "=== ADB devices ==="
           adb devices -l
@@ -268,8 +255,6 @@ jobs:
       - name: Wait for emulators to boot
         shell: bash
         run: |
-          export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
-
           wait_for_boot() {
             local serial=$1
             local timeout=300
@@ -288,13 +273,10 @@ jobs:
               elapsed=$((elapsed + 5))
             done
             echo "$serial failed to boot within ${timeout}s"
-            # Dump emulator stderr for debugging
-            echo "=== Emulator stderr logs ==="
-            cat emu1-stderr.log emu2-stderr.log emu3-stderr.log 2>/dev/null || true
+            cat emu1.log emu2.log emu3.log 2>/dev/null || true
             return 1
           }
 
-          # Wait for all 3 emulators sequentially
           wait_for_boot emulator-5554
           wait_for_boot emulator-5556
           wait_for_boot emulator-5558
@@ -305,39 +287,33 @@ jobs:
       - name: Configure shared network on emulators
         shell: bash
         run: |
-          export PATH="$ANDROID_HOME/platform-tools:$PATH"
+          # Restart adbd as root on all emulators (matches reference repo approach)
+          adb -s emulator-5554 root
+          adb -s emulator-5556 root
+          adb -s emulator-5558 root
+          sleep 2
 
           configure_emu_network() {
             local serial=$1
             local ip=$2
             local expected_mac=$3
 
-            echo "Configuring network on $serial with IP $ip (MAC: $expected_mac)..."
+            echo "=== Configuring $serial (IP: $ip, MAC: $expected_mac) ==="
 
             # List all interfaces for debugging
             echo "All interfaces on $serial:"
             adb -s "$serial" shell ip link show
 
-            # Find the NIC by MAC address (most reliable), or fall back to name guessing
+            # Find the NIC by MAC address
             local nic=""
-
-            # Try to find by MAC address first
             if [ -n "$expected_mac" ]; then
               nic=$(adb -s "$serial" shell ip link show 2>/dev/null | grep -B1 "$expected_mac" | head -1 | sed 's/^[0-9]*: \([^:@]*\).*/\1/')
-              if [ -n "$nic" ]; then
-                echo "Found NIC by MAC: $nic"
-              fi
             fi
 
-            # Fall back to trying known names
+            # Fall back to name-based detection
             if [ -z "$nic" ]; then
-              for name in eth1 eth0 ens4 enp0s4 enp0s10 enp0s3; do
+              for name in eth1 ens4 enp0s4 enp0s10 enp0s3; do
                 if adb -s "$serial" shell ip link show "$name" 2>/dev/null | grep -q "$name"; then
-                  # Skip if this is the SLIRP interface (has 10.0.2.x address)
-                  if adb -s "$serial" shell ip addr show "$name" 2>/dev/null | grep -q "10.0.2"; then
-                    echo "Skipping $name (SLIRP interface)"
-                    continue
-                  fi
                   nic=$name
                   break
                 fi
@@ -352,13 +328,15 @@ jobs:
             echo "Found NIC: $nic on $serial"
 
             # Configure the shared NIC
-            adb -s "$serial" shell su 0 ip addr add "$ip/24" dev "$nic"
-            adb -s "$serial" shell su 0 ip link set "$nic" up
+            adb -s "$serial" shell "ip link set dev $nic up"
+            adb -s "$serial" shell "ip addr add $ip/24 dev $nic"
+
+            # Add routing rule before disabling SLIRP (matches reference)
+            adb -s "$serial" shell "ip rule add from all lookup main pref 99" 2>/dev/null || true
 
             # Disable SLIRP interfaces so mDNS only uses the shared NIC
-            for iface in wlan0 radio0; do
-              adb -s "$serial" shell su 0 ip link set "$iface" down 2>/dev/null || true
-            done
+            adb -s "$serial" shell "ip link set wlan0 down" 2>/dev/null || true
+            adb -s "$serial" shell "ip link set radio0 down" 2>/dev/null || true
 
             echo "Network configured on $serial:"
             adb -s "$serial" shell ip addr show "$nic"
@@ -463,6 +441,6 @@ jobs:
           path: |
             test-output.txt
             emulator-logs.txt
-            emu1-stderr.log
-            emu2-stderr.log
-            emu3-stderr.log
+            emu1.log
+            emu2.log
+            emu3.log
