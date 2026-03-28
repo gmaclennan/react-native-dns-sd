@@ -115,34 +115,56 @@ jobs:
           adb devices -l
           sleep 5
 
+      - name: Verify harness setup
+        working-directory: e2e-harness
+        shell: bash
+        run: |
+          echo "=== Working directory ==="
+          pwd
+          echo "=== Node/npm versions ==="
+          node --version
+          npm --version
+          echo "=== Harness binary ==="
+          npx react-native-harness --version 2>&1 || echo "harness --version failed"
+          echo "=== Android project ==="
+          ls -la android/ 2>/dev/null || echo "No android/ directory!"
+          ls -la android/app/build.gradle 2>/dev/null || echo "No app/build.gradle!"
+          echo "=== Config files ==="
+          cat rn-harness.config.mjs
+          echo "=== ADB devices ==="
+          adb devices -l
+
       - name: Run NSD tests in parallel
         working-directory: e2e-harness
         shell: bash
         run: |
           set +e
 
-          # Run advertise test on emu2 (background)
+          echo "=== Starting advertise test on emu2 ==="
           npx react-native-harness --harnessRunner emu2 \
             tests/advertise.harness.ts \
-            2>&1 | tee /tmp/emu2-output.txt &
+            > /tmp/emu2-output.txt 2>&1 &
           EMU2_PID=$!
 
-          # Give emu2 a moment to start publishing
-          sleep 15
+          # Give emu2 time to build, install, and start publishing
+          sleep 30
 
-          # Run discover test on emu1 (foreground)
+          echo "=== Starting discover test on emu1 ==="
           npx react-native-harness --harnessRunner emu1 \
             tests/discover.harness.ts \
-            2>&1 | tee /tmp/emu1-output.txt
+            > /tmp/emu1-output.txt 2>&1
           EMU1_EXIT=$?
 
-          # Wait for emu2's advertise test to finish
+          # Wait for emu2
           wait $EMU2_PID
           EMU2_EXIT=$?
 
           echo ""
           echo "=== Emu1 (discover) exit: $EMU1_EXIT ==="
+          cat /tmp/emu1-output.txt
+          echo ""
           echo "=== Emu2 (advertise) exit: $EMU2_EXIT ==="
+          cat /tmp/emu2-output.txt
 
           # Fail if either test failed
           [ $EMU1_EXIT -eq 0 ] && [ $EMU2_EXIT -eq 0 ]
@@ -172,7 +194,7 @@ jobs:
           {
             echo "## RN Harness CI diagnostics (run ${{ github.run_number }})"
             echo ""
-            for f in /tmp/emu1-output.txt /tmp/emu2-output.txt emu1.log emu2.log; do
+            for f in /tmp/emu1-output.txt /tmp/emu2-output.txt $GITHUB_WORKSPACE/emu1.log $GITHUB_WORKSPACE/emu2.log; do
               echo "### $(basename $f)"
               echo '```'
               if [ -f "$f" ]; then tail -c 3000 "$f"; else echo "(not found)"; fi
