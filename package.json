@@ -2,12 +2,12 @@
   "name": "react-native-dns-sd",
   "version": "0.1.0",
   "description": "React Native module for DNS-SD over mDNS using Expo Modules API",
-  "main": "build/index.js",
-  "types": "build/index.d.ts",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
   "scripts": {
     "build": "tsc",
     "clean": "rm -rf build",
-    "prepare": "tsc",
+    "prepack": "tsc",
     "test": "jest",
     "lint": "eslint src/"
   },
