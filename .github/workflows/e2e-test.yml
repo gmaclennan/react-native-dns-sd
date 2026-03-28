@@ -284,15 +284,47 @@ jobs:
           echo "All emulators booted. Devices:"
           adb devices -l
 
+      - name: Dump emulator diagnostics
+        if: always()
+        shell: bash
+        run: |
+          echo "=== Emulator logs (last 50 lines each) ==="
+          for f in emu1.log emu2.log emu3.log; do
+            echo "--- $f ---"
+            tail -50 "$f" 2>/dev/null || echo "(not found)"
+          done
+
+          echo ""
+          echo "=== ADB devices ==="
+          adb devices -l
+
+          echo ""
+          echo "=== Restart adbd as root ==="
+          adb -s emulator-5554 root || true
+          adb -s emulator-5556 root || true
+          adb -s emulator-5558 root || true
+          sleep 2
+
+          for serial in emulator-5554 emulator-5556 emulator-5558; do
+            echo ""
+            echo "=========================================="
+            echo "=== Network info for $serial ==="
+            echo "=========================================="
+            echo "--- ip link show ---"
+            adb -s "$serial" shell ip link show 2>&1 || true
+            echo "--- ip addr show ---"
+            adb -s "$serial" shell ip addr show 2>&1 || true
+            echo "--- ip route show ---"
+            adb -s "$serial" shell ip route show 2>&1 || true
+            echo "--- /sys/class/net/ ---"
+            adb -s "$serial" shell ls -la /sys/class/net/ 2>&1 || true
+            echo "--- dmesg | grep -i net ---"
+            adb -s "$serial" shell dmesg 2>/dev/null | grep -i -E "net|eth|virtio|nic" | tail -20 || true
+          done
+
       - name: Configure shared network on emulators
         shell: bash
         run: |
-          # Restart adbd as root on all emulators (matches reference repo approach)
-          adb -s emulator-5554 root
-          adb -s emulator-5556 root
-          adb -s emulator-5558 root
-          sleep 2
-
           configure_emu_network() {
             local serial=$1
             local ip=$2
@@ -300,38 +332,49 @@ jobs:
 
             echo "=== Configuring $serial (IP: $ip, MAC: $expected_mac) ==="
 
-            # List all interfaces for debugging
-            echo "All interfaces on $serial:"
-            adb -s "$serial" shell ip link show
-
-            # Find the NIC by MAC address
+            # Dynamic NIC detection: find any interface that is NOT a known system one
             local nic=""
+
+            # Method 1: Find by MAC address
             if [ -n "$expected_mac" ]; then
-              nic=$(adb -s "$serial" shell ip link show 2>/dev/null | grep -B1 "$expected_mac" | head -1 | sed 's/^[0-9]*: \([^:@]*\).*/\1/')
+              nic=$(adb -s "$serial" shell ip link show 2>/dev/null \
+                | grep -B1 "$expected_mac" \
+                | head -1 \
+                | sed 's/^[0-9]*: \([^:@]*\).*/\1/' \
+                | tr -d '[:space:]')
+              if [ -n "$nic" ]; then
+                echo "Found NIC by MAC: '$nic'"
+              fi
             fi
 
-            # Fall back to name-based detection
+            # Method 2: Find any non-system interface
             if [ -z "$nic" ]; then
-              for name in eth1 ens4 enp0s4 enp0s10 enp0s3; do
-                if adb -s "$serial" shell ip link show "$name" 2>/dev/null | grep -q "$name"; then
-                  nic=$name
-                  break
-                fi
-              done
+              echo "MAC detection failed, trying exclusion method..."
+              nic=$(adb -s "$serial" shell ls /sys/class/net/ 2>/dev/null \
+                | tr -s '[:space:]' '\n' \
+                | grep -v -E '^(lo|sit0|ip6tnl0|ip6_vti0|wlan0|radio0|dummy0|tunl0)$' \
+                | grep -v '^$' \
+                | head -1 \
+                | tr -d '[:space:]')
+              if [ -n "$nic" ]; then
+                echo "Found NIC by exclusion: '$nic'"
+              fi
             fi
 
             if [ -z "$nic" ]; then
               echo "ERROR: Could not find second NIC on $serial"
+              echo "Available interfaces:"
+              adb -s "$serial" shell ls /sys/class/net/ 2>&1 || true
               return 1
             fi
 
-            echo "Found NIC: $nic on $serial"
+            echo "Using NIC: $nic on $serial"
 
             # Configure the shared NIC
             adb -s "$serial" shell "ip link set dev $nic up"
             adb -s "$serial" shell "ip addr add $ip/24 dev $nic"
 
-            # Add routing rule before disabling SLIRP (matches reference)
+            # Add routing rule (matches reference)
             adb -s "$serial" shell "ip rule add from all lookup main pref 99" 2>/dev/null || true
 
             # Disable SLIRP interfaces so mDNS only uses the shared NIC
