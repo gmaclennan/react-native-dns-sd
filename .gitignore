@@ -1,34 +1,64 @@
-# Gradle files
-.gradle/
-build/
+# Dependencies
+node_modules/
 
-# Local configuration file (sdk path, etc)
+# Build outputs
+build/
+dist/
+lib/
+
+# Gradle
+.gradle/
 local.properties
 
-# Log/OS Files
-*.log
-
-# Android Studio generated files and folders
-captures/
-.externalNativeBuild/
-.cxx/
+# Android
 *.aab
 *.apk
 output-metadata.json
+captures/
+.externalNativeBuild/
+.cxx/
 
-# IntelliJ
+# iOS
+*.xcworkspace
+!*.xcworkspace/contents.xcworkspacedata
+Pods/
+DerivedData/
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.xcuserstate
+project.xcworkspace/
+xcuserdata/
+*.hmap
+*.ipa
+
+# IDE
 *.iml
 .idea/
-misc.xml
-deploymentTargetDropDown.xml
-render.experimental.xml
+.vscode/
+*.swp
+*.swo
+.DS_Store
 
-# Keystore files
+# Logs
+*.log
+*.hprof
+
+# Keystore
 *.jks
 *.keystore
 
-# Google Services (e.g. APIs or Firebase)
+# Misc
 google-services.json
+.env
+.env.*
 
-# Android Profiling
-*.hprof
+# Example app
+example/node_modules/
+example/.expo/
+example/android/.gradle/
+example/android/build/
+example/android/app/build/
+example/ios/Pods/
+example/ios/build/

@@ -1,0 +1,14 @@
+{
+  "expo": {
+    "name": "dns-sd-example",
+    "slug": "dns-sd-example",
+    "version": "1.0.0",
+    "android": {
+      "package": "com.dnssdexample"
+    },
+    "ios": {
+      "bundleIdentifier": "com.dnssdexample"
+    },
+    "plugins": []
+  }
+}

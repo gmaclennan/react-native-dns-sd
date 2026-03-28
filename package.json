@@ -1,0 +1,49 @@
+{
+  "name": "react-native-dns-sd",
+  "version": "0.1.0",
+  "description": "React Native module for DNS-SD over mDNS using Expo Modules API",
+  "main": "build/index.js",
+  "types": "build/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf build",
+    "prepare": "tsc",
+    "test": "jest",
+    "lint": "eslint src/"
+  },
+  "keywords": [
+    "react-native",
+    "expo",
+    "dns-sd",
+    "mdns",
+    "zeroconf",
+    "bonjour",
+    "nsd",
+    "service-discovery"
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "expo": ">=51.0.0",
+    "react": ">=18.0.0",
+    "react-native": ">=0.74.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.0",
+    "expo": "^52.0.0",
+    "expo-modules-core": "^2.0.0",
+    "react": "^18.2.0",
+    "react-native": "^0.76.0",
+    "typescript": "^5.3.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gmaclennan/react-native-dns-sd.git"
+  },
+  "files": [
+    "build/",
+    "src/",
+    "android/",
+    "ios/",
+    "expo-module.config.json"
+  ]
+}

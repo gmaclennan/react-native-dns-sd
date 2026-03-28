@@ -1,0 +1,283 @@
+name: E2E NSD Tests
+
+on:
+  push:
+    branches: ['*']
+  pull_request:
+    branches: [main]
+
+jobs:
+  # Job 1: Single emulator baseline - verify NSD works at all
+  baseline:
+    name: Baseline (single emulator)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Build test APKs
+        working-directory: e2e-test
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug assembleDebugAndroidTest
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run baseline tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          target: default
+          force-avd-creation: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          script: |
+            adb install -t e2e-test/app/build/outputs/apk/debug/app-debug.apk
+            adb install -t e2e-test/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+            adb shell am instrument -w \
+              -e class expo.modules.dnssd.test.NsdDiscoveryTest#nsdRegistrationWorks \
+              expo.modules.dnssd.test.test/androidx.test.runner.AndroidJUnitRunner 2>&1 | tee test-output.txt
+            adb shell am instrument -w \
+              -e class expo.modules.dnssd.test.NsdDiscoveryTest#nsdDiscoveryStarts \
+              expo.modules.dnssd.test.test/androidx.test.runner.AndroidJUnitRunner 2>&1 | tee -a test-output.txt
+            cat test-output.txt
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: baseline-test-results
+          path: test-output.txt
+
+  # Job 2: Three emulators with QEMU socket multicast for cross-emulator mDNS
+  cross-emulator:
+    name: Cross-emulator NSD (3 emulators)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Build test APKs
+        working-directory: e2e-test
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug assembleDebugAndroidTest
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Set up Android SDK
+        run: |
+          # Ensure cmdline-tools and emulator are available
+          echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --install \
+            "system-images;android-30;default;x86_64" \
+            "platform-tools" \
+            "platforms;android-30" \
+            "emulator"
+
+      - name: Create AVDs
+        run: |
+          export ANDROID_AVD_HOME=$HOME/.config/.android/avd
+          mkdir -p "$ANDROID_AVD_HOME"
+
+          for i in 1 2 3; do
+            echo "no" | $ANDROID_HOME/cmdline-tools/latest/bin/avdmanager create avd \
+              --force --name "avd${i}" \
+              --package "system-images;android-30;default;x86_64" \
+              --device "pixel_4"
+          done
+
+      - name: Launch 3 emulators with shared network
+        run: |
+          export ANDROID_AVD_HOME=$HOME/.config/.android/avd
+
+          # Emulator 1: test runner
+          $ANDROID_HOME/emulator/emulator @avd1 -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim \
+            -qemu \
+            -device virtio-net-pci,netdev=sharedlan,mac=52:54:00:12:34:56 \
+            -netdev socket,id=sharedlan,mcast=230.0.0.1:1234 &
+          EMU1_PID=$!
+
+          # Emulator 2: service advertiser
+          $ANDROID_HOME/emulator/emulator @avd2 -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim \
+            -qemu \
+            -device virtio-net-pci,netdev=sharedlan,mac=52:54:00:12:34:57 \
+            -netdev socket,id=sharedlan,mcast=230.0.0.1:1234 &
+          EMU2_PID=$!
+
+          # Emulator 3: service advertiser
+          $ANDROID_HOME/emulator/emulator @avd3 -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim \
+            -qemu \
+            -device virtio-net-pci,netdev=sharedlan,mac=52:54:00:12:34:58 \
+            -netdev socket,id=sharedlan,mcast=230.0.0.1:1234 &
+          EMU3_PID=$!
+
+          echo "EMU1_PID=$EMU1_PID" >> $GITHUB_ENV
+          echo "EMU2_PID=$EMU2_PID" >> $GITHUB_ENV
+          echo "EMU3_PID=$EMU3_PID" >> $GITHUB_ENV
+
+      - name: Wait for emulators to boot
+        run: |
+          wait_for_boot() {
+            local serial=$1
+            local timeout=300
+            local elapsed=0
+
+            echo "Waiting for $serial to come online..."
+            adb -s "$serial" wait-for-device
+
+            echo "Waiting for $serial to finish booting..."
+            while [ $elapsed -lt $timeout ]; do
+              if adb -s "$serial" shell getprop sys.boot_completed 2>/dev/null | grep -q "1"; then
+                echo "$serial booted after ${elapsed}s"
+                return 0
+              fi
+              sleep 5
+              elapsed=$((elapsed + 5))
+            done
+            echo "$serial failed to boot within ${timeout}s"
+            return 1
+          }
+
+          # Wait for all 3 emulators
+          # They get serials emulator-5554, emulator-5556, emulator-5558
+          wait_for_boot emulator-5554 &
+          wait_for_boot emulator-5556 &
+          wait_for_boot emulator-5558 &
+          wait
+
+          echo "All emulators booted. Devices:"
+          adb devices -l
+
+      - name: Configure shared network on emulators
+        run: |
+          configure_emu_network() {
+            local serial=$1
+            local ip=$2
+
+            echo "Configuring network on $serial with IP $ip..."
+
+            # Find the second NIC (added via QEMU)
+            local nic=""
+            for name in eth1 ens4 enp0s4 enp0s10; do
+              if adb -s "$serial" shell ip link show "$name" 2>/dev/null | grep -q "$name"; then
+                nic=$name
+                break
+              fi
+            done
+
+            if [ -z "$nic" ]; then
+              echo "ERROR: Could not find second NIC on $serial"
+              adb -s "$serial" shell ip link show
+              return 1
+            fi
+
+            echo "Found NIC: $nic on $serial"
+
+            # Configure the shared NIC
+            adb -s "$serial" shell su 0 ip addr add "$ip/24" dev "$nic"
+            adb -s "$serial" shell su 0 ip link set "$nic" up
+
+            # Disable SLIRP interfaces so mDNS only uses the shared NIC
+            for iface in wlan0 radio0; do
+              adb -s "$serial" shell su 0 ip link set "$iface" down 2>/dev/null || true
+            done
+
+            echo "Network configured on $serial:"
+            adb -s "$serial" shell ip addr show "$nic"
+          }
+
+          configure_emu_network emulator-5554 192.168.77.10
+          configure_emu_network emulator-5556 192.168.77.11
+          configure_emu_network emulator-5558 192.168.77.12
+
+          # Verify connectivity
+          echo "Testing ping from emu1 to emu2..."
+          adb -s emulator-5554 shell ping -c 2 -W 5 192.168.77.11 || echo "Ping failed (may be expected)"
+          echo "Testing ping from emu1 to emu3..."
+          adb -s emulator-5554 shell ping -c 2 -W 5 192.168.77.12 || echo "Ping failed (may be expected)"
+
+      - name: Install APKs on all emulators
+        run: |
+          for serial in emulator-5554 emulator-5556 emulator-5558; do
+            echo "Installing on $serial..."
+            adb -s "$serial" install -t e2e-test/app/build/outputs/apk/debug/app-debug.apk
+            adb -s "$serial" install -t e2e-test/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          done
+
+      - name: Start service advertisers on emu2 and emu3
+        run: |
+          # Start advertising on emulator 2
+          adb -s emulator-5556 shell am start \
+            -n expo.modules.dnssd.test/.MainActivity \
+            --es service_name "DnsSdTest-Emulator2"
+
+          # Start advertising on emulator 3
+          adb -s emulator-5558 shell am start \
+            -n expo.modules.dnssd.test/.MainActivity \
+            --es service_name "DnsSdTest-Emulator3"
+
+          # Give services time to register
+          sleep 5
+
+          echo "Services should be advertising on emu2 and emu3"
+
+      - name: Run cross-emulator tests on emu1
+        run: |
+          echo "Running cross-emulator discovery tests on emulator-5554..."
+          adb -s emulator-5554 shell am instrument -w \
+            expo.modules.dnssd.test.test/androidx.test.runner.AndroidJUnitRunner 2>&1 | tee test-output.txt
+
+          echo ""
+          echo "=== TEST OUTPUT ==="
+          cat test-output.txt
+
+          # Check for failures
+          if grep -q "FAILURES" test-output.txt; then
+            echo "::error::Tests failed!"
+            exit 1
+          fi
+
+      - name: Collect logs
+        if: always()
+        run: |
+          for serial in emulator-5554 emulator-5556 emulator-5558; do
+            echo "=== Logs from $serial ==="
+            adb -s "$serial" logcat -d -s "DnsSdE2ETest:*" "NsdDiscoveryTest:*" "NsdManager:*" 2>/dev/null | tail -200 || true
+          done | tee emulator-logs.txt
+
+      - name: Cleanup emulators
+        if: always()
+        run: |
+          for serial in emulator-5554 emulator-5556 emulator-5558; do
+            adb -s "$serial" emu kill 2>/dev/null || true
+          done
+          kill $EMU1_PID $EMU2_PID $EMU3_PID 2>/dev/null || true
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cross-emulator-test-results
+          path: |
+            test-output.txt
+            emulator-logs.txt
