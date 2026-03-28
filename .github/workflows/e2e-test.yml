@@ -149,7 +149,7 @@ jobs:
           cat baseline-logs.txt
 
       - name: Post baseline diagnostics as PR comment
-        if: always() && github.event_name == 'pull_request'
+        if: always()
         uses: actions/github-script@v7
         with:
           script: |
@@ -162,12 +162,28 @@ jobs:
               } catch { body += `### ${f}\n(not found)\n\n`; }
             }
             if (body.length > 65000) body = body.slice(0, 65000) + '\n(truncated)';
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body
-            });
+            // Find PR number: from event context or by searching for PRs on this branch
+            let prNumber = context.issue?.number;
+            if (!prNumber) {
+              const branch = context.ref.replace('refs/heads/', '');
+              const prs = await github.rest.pulls.list({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                head: `${context.repo.owner}:${branch}`,
+                state: 'open'
+              });
+              if (prs.data.length > 0) prNumber = prs.data[0].number;
+            }
+            if (prNumber) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body
+              });
+            } else {
+              console.log('No PR found, skipping comment. Body:\n' + body);
+            }
 
       - name: Upload test results
         if: always()
@@ -502,7 +518,7 @@ jobs:
           kill "$EMU1_PID" "$EMU2_PID" "$EMU3_PID" 2>/dev/null || true
 
       - name: Post diagnostics as PR comment
-        if: always() && github.event_name == 'pull_request'
+        if: always()
         uses: actions/github-script@v7
         with:
           script: |
@@ -538,12 +554,28 @@ jobs:
             // Truncate to 65000 chars for GitHub API limit
             if (body.length > 65000) body = body.slice(0, 65000) + '\n\n(truncated)';
 
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body
-            });
+            // Find PR number: from event context or by searching for PRs on this branch
+            let prNumber = context.issue?.number;
+            if (!prNumber) {
+              const branch = context.ref.replace('refs/heads/', '');
+              const prs = await github.rest.pulls.list({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                head: `${context.repo.owner}:${branch}`,
+                state: 'open'
+              });
+              if (prs.data.length > 0) prNumber = prs.data[0].number;
+            }
+            if (prNumber) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body
+              });
+            } else {
+              console.log('No PR found, skipping comment. Body:\n' + body);
+            }
 
       - name: Upload test results
         if: always()
