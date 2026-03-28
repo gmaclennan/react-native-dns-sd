@@ -246,22 +246,42 @@ jobs:
           configure_emu_network() {
             local serial=$1
             local ip=$2
+            local expected_mac=$3
 
-            echo "Configuring network on $serial with IP $ip..."
+            echo "Configuring network on $serial with IP $ip (MAC: $expected_mac)..."
 
-            # Find the second NIC (added via QEMU)
+            # List all interfaces for debugging
+            echo "All interfaces on $serial:"
+            adb -s "$serial" shell ip link show
+
+            # Find the NIC by MAC address (most reliable), or fall back to name guessing
             local nic=""
-            for name in eth1 ens4 enp0s4 enp0s10; do
-              if adb -s "$serial" shell ip link show "$name" 2>/dev/null | grep -q "$name"; then
-                nic=$name
-                break
+
+            # Try to find by MAC address first
+            if [ -n "$expected_mac" ]; then
+              nic=$(adb -s "$serial" shell ip link show 2>/dev/null | grep -B1 "$expected_mac" | head -1 | sed 's/^[0-9]*: \([^:@]*\).*/\1/')
+              if [ -n "$nic" ]; then
+                echo "Found NIC by MAC: $nic"
               fi
-            done
+            fi
+
+            # Fall back to trying known names
+            if [ -z "$nic" ]; then
+              for name in eth1 eth0 ens4 enp0s4 enp0s10 enp0s3; do
+                if adb -s "$serial" shell ip link show "$name" 2>/dev/null | grep -q "$name"; then
+                  # Skip if this is the SLIRP interface (has 10.0.2.x address)
+                  if adb -s "$serial" shell ip addr show "$name" 2>/dev/null | grep -q "10.0.2"; then
+                    echo "Skipping $name (SLIRP interface)"
+                    continue
+                  fi
+                  nic=$name
+                  break
+                fi
+              done
+            fi
 
             if [ -z "$nic" ]; then
               echo "ERROR: Could not find second NIC on $serial"
-              echo "Available interfaces:"
-              adb -s "$serial" shell ip link show
               return 1
             fi
 
@@ -280,9 +300,9 @@ jobs:
             adb -s "$serial" shell ip addr show "$nic"
           }
 
-          configure_emu_network emulator-5554 192.168.77.10
-          configure_emu_network emulator-5556 192.168.77.11
-          configure_emu_network emulator-5558 192.168.77.12
+          configure_emu_network emulator-5554 192.168.77.10 "52:54:00:12:34:56"
+          configure_emu_network emulator-5556 192.168.77.11 "52:54:00:12:34:57"
+          configure_emu_network emulator-5558 192.168.77.12 "52:54:00:12:34:58"
 
           # Verify connectivity
           echo "Testing ping from emu1 to emu2..."
