@@ -176,33 +176,64 @@ jobs:
         run: |
           export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
 
-          # Emulator 1: test runner
+          echo "=== Emulator version ==="
+          emulator -version || true
+
+          echo "=== AVDs available ==="
+          emulator -list-avds || true
+
+          # Launch with QEMU extra NIC for shared multicast network
+          # Redirect stderr to log files for debugging
           emulator @avd1 -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim \
             -qemu \
             -device virtio-net-pci,netdev=sharedlan,mac=52:54:00:12:34:56 \
-            -netdev socket,id=sharedlan,mcast=230.0.0.1:1234 &
+            -netdev socket,id=sharedlan,mcast=230.0.0.1:1234 \
+            2>emu1-stderr.log &
           EMU1_PID=$!
+          echo "Launched emu1 (PID $EMU1_PID)"
 
-          # Emulator 2: service advertiser
           emulator @avd2 -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim \
             -qemu \
             -device virtio-net-pci,netdev=sharedlan,mac=52:54:00:12:34:57 \
-            -netdev socket,id=sharedlan,mcast=230.0.0.1:1234 &
+            -netdev socket,id=sharedlan,mcast=230.0.0.1:1234 \
+            2>emu2-stderr.log &
           EMU2_PID=$!
+          echo "Launched emu2 (PID $EMU2_PID)"
 
-          # Emulator 3: service advertiser
           emulator @avd3 -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim \
             -qemu \
             -device virtio-net-pci,netdev=sharedlan,mac=52:54:00:12:34:58 \
-            -netdev socket,id=sharedlan,mcast=230.0.0.1:1234 &
+            -netdev socket,id=sharedlan,mcast=230.0.0.1:1234 \
+            2>emu3-stderr.log &
           EMU3_PID=$!
+          echo "Launched emu3 (PID $EMU3_PID)"
 
           echo "EMU1_PID=$EMU1_PID" >> "$GITHUB_ENV"
           echo "EMU2_PID=$EMU2_PID" >> "$GITHUB_ENV"
           echo "EMU3_PID=$EMU3_PID" >> "$GITHUB_ENV"
 
           # Give emulators time to start their ADB connections
-          sleep 10
+          sleep 15
+
+          # Check if emulators are still running
+          for pid in $EMU1_PID $EMU2_PID $EMU3_PID; do
+            if kill -0 "$pid" 2>/dev/null; then
+              echo "PID $pid is running"
+            else
+              echo "WARNING: PID $pid is NOT running!"
+            fi
+          done
+
+          # Show any early errors
+          echo "=== emu1 stderr (first 30 lines) ==="
+          head -30 emu1-stderr.log 2>/dev/null || true
+          echo "=== emu2 stderr (first 30 lines) ==="
+          head -30 emu2-stderr.log 2>/dev/null || true
+          echo "=== emu3 stderr (first 30 lines) ==="
+          head -30 emu3-stderr.log 2>/dev/null || true
+
+          echo "=== ADB devices ==="
+          adb devices -l
 
       - name: Wait for emulators to boot
         shell: bash
@@ -227,10 +258,13 @@ jobs:
               elapsed=$((elapsed + 5))
             done
             echo "$serial failed to boot within ${timeout}s"
+            # Dump emulator stderr for debugging
+            echo "=== Emulator stderr logs ==="
+            cat emu1-stderr.log emu2-stderr.log emu3-stderr.log 2>/dev/null || true
             return 1
           }
 
-          # Wait for all 3 emulators sequentially to avoid race conditions
+          # Wait for all 3 emulators sequentially
           wait_for_boot emulator-5554
           wait_for_boot emulator-5556
           wait_for_boot emulator-5558
@@ -390,3 +424,6 @@ jobs:
           path: |
             test-output.txt
             emulator-logs.txt
+            emu1-stderr.log
+            emu2-stderr.log
+            emu3-stderr.log
