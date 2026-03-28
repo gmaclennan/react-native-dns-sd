@@ -26,5 +26,5 @@ android {
 
 dependencies {
   implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.9.24")
-  implementation("expo:expo-modules-core")
+  implementation(project(":expo-modules-core"))
 }
