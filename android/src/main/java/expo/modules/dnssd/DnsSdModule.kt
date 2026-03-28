@@ -128,7 +128,7 @@ class DnsSdModule : Module() {
   private fun resolveService(serviceInfo: NsdServiceInfo) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
       // API 34+: use resolveService with Executor
-      getNsdManager().resolveService(serviceInfo, { it.run() }, object : NsdManager.ServiceInfoCallback {
+      getNsdManager().resolveService(serviceInfo, java.util.concurrent.Executor { it.run() }, object : NsdManager.ServiceInfoCallback {
         override fun onServiceInfoCallbackRegistrationFailed(errorCode: Int) {
           Log.e(TAG, "Service info callback registration failed: $errorCode")
         }
