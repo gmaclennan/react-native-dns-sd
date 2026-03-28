@@ -1,0 +1,9 @@
+{
+  "platforms": ["android", "ios"],
+  "android": {
+    "modules": ["expo.modules.dnssd.DnsSdModule"]
+  },
+  "ios": {
+    "modules": ["DnsSdModule"]
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "expo": {
+    "name": "NsdTestApp",
+    "slug": "nsd-test-app",
+    "version": "1.0.0",
+    "android": {
+      "package": "com.nsdtest"
+    },
+    "plugins": [],
+    "autolinking": {
+      "exclude": ["e2e-test"]
+    }
+  }
+}

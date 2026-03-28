@@ -1,0 +1,260 @@
+name: E2E Harness NSD Tests
+
+on:
+  push:
+    branches: ['*']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+env:
+  ANDROID_AVD_HOME: /home/runner/.config/.android/avd
+
+jobs:
+  cross-emulator-harness:
+    name: RN Harness cross-emulator NSD
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Add Android tools to PATH
+        shell: bash
+        run: |
+          echo "$ANDROID_HOME/emulator" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+
+      - name: Install dependencies
+        working-directory: e2e-harness
+        shell: bash
+        run: npm install
+
+      - name: Generate Android project (Expo prebuild)
+        working-directory: e2e-harness
+        shell: bash
+        run: |
+          npx expo prebuild --platform android --clean
+          echo "=== Generated settings.gradle ==="
+          cat android/settings.gradle
+
+      - name: Log Kotlin version from generated build
+        working-directory: e2e-harness
+        shell: bash
+        run: |
+          echo "=== Kotlin version in build.gradle ==="
+          grep -i kotlin android/build.gradle || true
+          echo "=== gradle.properties ==="
+          cat android/gradle.properties
+
+      - name: Exclude e2e-test from Gradle build
+        shell: bash
+        run: |
+          # The e2e-test directory has its own build.gradle.kts which conflicts
+          # with the harness app's Gradle build. Remove it temporarily during build.
+          if [ -f e2e-test/build.gradle.kts ]; then
+            mv e2e-test/build.gradle.kts e2e-test/build.gradle.kts.bak
+            echo "Renamed e2e-test/build.gradle.kts to prevent Gradle inclusion"
+          fi
+          if [ -f e2e-test/settings.gradle.kts ]; then
+            mv e2e-test/settings.gradle.kts e2e-test/settings.gradle.kts.bak
+            echo "Renamed e2e-test/settings.gradle.kts"
+          fi
+
+      - name: Build debug APK
+        working-directory: e2e-harness/android
+        shell: bash
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug 2>&1 | tee /tmp/gradle-build.txt
+          echo "=== APK locations ==="
+          find . -name "*.apk" -type f
+
+      - name: Enable KVM
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install system image & create AVDs
+        shell: bash
+        run: |
+          echo "y" | sdkmanager --install "system-images;android-30;default;x86_64"
+          echo "no" | avdmanager create avd -n avd1 \
+            -k "system-images;android-30;default;x86_64" --force
+          echo "no" | avdmanager create avd -n avd2 \
+            -k "system-images;android-30;default;x86_64" --force
+
+      - name: Start emulators with QEMU socket multicast
+        shell: bash
+        run: |
+          emulator @avd1 -no-window -no-audio -no-boot-anim \
+            -gpu swiftshader_indirect -no-snapshot \
+            -qemu -device virtio-net-pci,netdev=lan,mac=52:54:00:12:34:56 \
+            -netdev socket,id=lan,mcast=230.0.0.1:1234 \
+            >emu1.log 2>&1 &
+
+          sleep 5
+
+          emulator @avd2 -no-window -no-audio -no-boot-anim \
+            -gpu swiftshader_indirect -no-snapshot \
+            -qemu -device virtio-net-pci,netdev=lan,mac=52:54:00:12:34:57 \
+            -netdev socket,id=lan,mcast=230.0.0.1:1234 \
+            >emu2.log 2>&1 &
+
+      - name: Wait for boot & configure networking
+        shell: bash
+        run: |
+          for serial in emulator-5554 emulator-5556; do
+            echo "Waiting for $serial..."
+            timeout 300 adb -s "$serial" wait-for-device
+            while [ "$(adb -s "$serial" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" != "1" ]; do
+              sleep 5
+            done
+            echo "$serial booted"
+          done
+
+          adb -s emulator-5554 root 2>&1 || true
+          adb -s emulator-5556 root 2>&1 || true
+          sleep 2
+
+          # Configure shared NIC (use su 0 for commands requiring root)
+          for serial_ip in "emulator-5554 192.168.77.10" "emulator-5556 192.168.77.11"; do
+            serial=${serial_ip%% *}
+            ip=${serial_ip##* }
+            # Try direct first (works if adb root succeeded), fall back to su 0
+            adb -s "$serial" shell "ip link set eth1 up" 2>/dev/null \
+              || adb -s "$serial" shell "su 0 ip link set eth1 up"
+            adb -s "$serial" shell "ip addr add $ip/24 dev eth1" 2>/dev/null \
+              || adb -s "$serial" shell "su 0 ip addr add $ip/24 dev eth1"
+            adb -s "$serial" shell "ip rule add from all lookup main pref 99" 2>/dev/null || true
+            # NOTE: Do NOT disable wlan0/radio0 for harness tests.
+            # The harness needs SLIRP network to connect Metro dev server.
+            # mDNS will still discover on eth1 since it's active.
+          done
+
+          echo "=== Network configured ==="
+          adb devices -l
+          sleep 5
+
+      - name: Install app on emulators
+        shell: bash
+        run: |
+          APP_APK=$(find e2e-harness/android -name "app-debug.apk" -type f | head -1)
+          echo "APK: $APP_APK"
+          if [ -z "$APP_APK" ]; then
+            echo "ERROR: APK not found!"
+            find e2e-harness/android -name "*.apk" -type f
+            exit 1
+          fi
+          for serial in emulator-5554 emulator-5556; do
+            echo "Installing on $serial..."
+            adb -s "$serial" install -t "$APP_APK"
+          done
+          echo "=== Installed packages ==="
+          adb -s emulator-5554 shell pm list packages | grep nsdtest || echo "App not found!"
+
+      - name: Verify harness setup
+        working-directory: e2e-harness
+        shell: bash
+        run: |
+          echo "=== Working directory ==="
+          pwd
+          echo "=== Node/npm versions ==="
+          node --version
+          npm --version
+          echo "=== Harness binary ==="
+          npx react-native-harness --version 2>&1 || echo "harness --version failed"
+          echo "=== Android project ==="
+          ls -la android/ 2>/dev/null || echo "No android/ directory!"
+          ls -la android/app/build.gradle 2>/dev/null || echo "No app/build.gradle!"
+          echo "=== Config files ==="
+          cat rn-harness.config.mjs
+          echo "=== ADB devices ==="
+          adb devices -l
+
+      - name: Try running harness on emu2 (advertise)
+        working-directory: e2e-harness
+        shell: bash
+        continue-on-error: true
+        run: |
+          echo "=== Starting advertise test on emu2 ==="
+          npx react-native-harness --harnessRunner emu2 \
+            --verbose \
+            tests/advertise.harness.ts 2>&1 | tee /tmp/emu2-output.txt
+          echo "Exit code: $?"
+
+      - name: Try running harness on emu1 (discover)
+        working-directory: e2e-harness
+        shell: bash
+        continue-on-error: true
+        run: |
+          echo "=== Starting discover test on emu1 ==="
+          npx react-native-harness --harnessRunner emu1 \
+            --verbose \
+            tests/discover.harness.ts 2>&1 | tee /tmp/emu1-output.txt
+          echo "Exit code: $?"
+
+      - name: Collect logs
+        if: always()
+        shell: bash
+        run: |
+          echo "=== Emu1 harness output ==="
+          cat /tmp/emu1-output.txt 2>/dev/null || echo "(not found)"
+          echo ""
+          echo "=== Emu2 harness output ==="
+          cat /tmp/emu2-output.txt 2>/dev/null || echo "(not found)"
+          echo ""
+          echo "=== Emulator logcat ==="
+          for serial in emulator-5554 emulator-5556; do
+            echo "--- $serial ---"
+            timeout 30 adb -s "$serial" logcat -d -s "DnsSdModule:*" "NsdManager:*" "ReactNativeJS:*" "AndroidRuntime:*" 2>/dev/null | tail -100 || true
+          done
+
+      - name: Post diagnostics as PR comment
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "## RN Harness CI diagnostics (run ${{ github.run_number }})"
+            echo ""
+            for f in /tmp/gradle-build.txt /tmp/emu1-output.txt /tmp/emu2-output.txt $GITHUB_WORKSPACE/emu1.log $GITHUB_WORKSPACE/emu2.log; do
+              echo "### $(basename $f)"
+              echo '```'
+              if [ -f "$f" ]; then tail -c 3000 "$f"; else echo "(not found)"; fi
+              echo '```'
+              echo ""
+            done
+          } > /tmp/pr-comment.md
+
+          gh pr comment 1 --repo "${{ github.repository }}" --body-file /tmp/pr-comment.md || {
+            echo "Failed to post PR comment, dumping content:"
+            cat /tmp/pr-comment.md
+          }
+
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: |
+          for serial in emulator-5554 emulator-5556; do
+            adb -s "$serial" emu kill 2>/dev/null || true
+          done
