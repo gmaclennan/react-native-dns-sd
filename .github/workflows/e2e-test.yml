@@ -113,8 +113,9 @@ jobs:
       - name: Collect logs
         if: always()
         shell: bash
+        timeout-minutes: 1
         run: |
-          adb logcat -d -s "DnsSdE2ETest:*" "NsdDiscoveryTest:*" "NsdManager:*" 2>/dev/null | tail -200 > baseline-logs.txt || true
+          timeout 30 adb logcat -d -s "DnsSdE2ETest:*" "NsdDiscoveryTest:*" "NsdManager:*" 2>/dev/null | tail -200 > baseline-logs.txt || true
           cat baseline-logs.txt
 
       - name: Post baseline diagnostics as PR comment
