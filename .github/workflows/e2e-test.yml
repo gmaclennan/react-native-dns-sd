@@ -148,6 +148,27 @@ jobs:
           adb logcat -d -s "DnsSdE2ETest:*" "NsdDiscoveryTest:*" "NsdManager:*" 2>/dev/null | tail -200 > baseline-logs.txt || true
           cat baseline-logs.txt
 
+      - name: Post baseline diagnostics as PR comment
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let body = '## Baseline CI diagnostics\n\n';
+            for (const f of ['test-output.txt', 'baseline-logs.txt']) {
+              try {
+                const content = fs.readFileSync(f, 'utf8').slice(-5000);
+                body += `### ${f}\n\`\`\`\n${content}\n\`\`\`\n\n`;
+              } catch { body += `### ${f}\n(not found)\n\n`; }
+            }
+            if (body.length > 65000) body = body.slice(0, 65000) + '\n(truncated)';
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body
+            });
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
@@ -288,39 +309,43 @@ jobs:
         if: always()
         shell: bash
         run: |
-          echo "=== Emulator logs (last 50 lines each) ==="
-          for f in emu1.log emu2.log emu3.log; do
-            echo "--- $f ---"
-            tail -50 "$f" 2>/dev/null || echo "(not found)"
-          done
+          {
+            echo "=== Emulator version ==="
+            emulator -version 2>&1 || true
 
-          echo ""
-          echo "=== ADB devices ==="
-          adb devices -l
-
-          echo ""
-          echo "=== Restart adbd as root ==="
-          adb -s emulator-5554 root || true
-          adb -s emulator-5556 root || true
-          adb -s emulator-5558 root || true
-          sleep 2
-
-          for serial in emulator-5554 emulator-5556 emulator-5558; do
             echo ""
-            echo "=========================================="
-            echo "=== Network info for $serial ==="
-            echo "=========================================="
-            echo "--- ip link show ---"
-            adb -s "$serial" shell ip link show 2>&1 || true
-            echo "--- ip addr show ---"
-            adb -s "$serial" shell ip addr show 2>&1 || true
-            echo "--- ip route show ---"
-            adb -s "$serial" shell ip route show 2>&1 || true
-            echo "--- /sys/class/net/ ---"
-            adb -s "$serial" shell ls -la /sys/class/net/ 2>&1 || true
-            echo "--- dmesg | grep -i net ---"
-            adb -s "$serial" shell dmesg 2>/dev/null | grep -i -E "net|eth|virtio|nic" | tail -20 || true
-          done
+            echo "=== Emulator logs (last 50 lines each) ==="
+            for f in emu1.log emu2.log emu3.log; do
+              echo "--- $f ---"
+              tail -50 "$f" 2>/dev/null || echo "(not found)"
+            done
+
+            echo ""
+            echo "=== ADB devices ==="
+            adb devices -l
+
+            echo ""
+            echo "=== Restart adbd as root ==="
+            adb -s emulator-5554 root 2>&1 || true
+            adb -s emulator-5556 root 2>&1 || true
+            adb -s emulator-5558 root 2>&1 || true
+            sleep 2
+
+            for serial in emulator-5554 emulator-5556 emulator-5558; do
+              echo ""
+              echo "=========================================="
+              echo "=== Network info for $serial ==="
+              echo "=========================================="
+              echo "--- ip link show ---"
+              adb -s "$serial" shell ip link show 2>&1 || true
+              echo "--- ip addr show ---"
+              adb -s "$serial" shell ip addr show 2>&1 || true
+              echo "--- /sys/class/net/ ---"
+              adb -s "$serial" shell ls -la /sys/class/net/ 2>&1 || true
+              echo "--- dmesg | grep -i net/virtio ---"
+              adb -s "$serial" shell dmesg 2>/dev/null | grep -i -E "net|eth|virtio" | tail -20 || true
+            done
+          } 2>&1 | tee network-diagnostics.txt
 
       - name: Configure shared network on emulators
         shell: bash
@@ -476,6 +501,50 @@ jobs:
           done
           kill "$EMU1_PID" "$EMU2_PID" "$EMU3_PID" 2>/dev/null || true
 
+      - name: Post diagnostics as PR comment
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let body = '## Cross-emulator CI diagnostics\n\n';
+
+            // Network diagnostics
+            try {
+              const d = fs.readFileSync('network-diagnostics.txt', 'utf8').slice(-8000);
+              body += `### network-diagnostics.txt\n\`\`\`\n${d}\n\`\`\`\n\n`;
+            } catch { body += '### network-diagnostics.txt\n(not found)\n\n'; }
+
+            // Emulator logs
+            for (const f of ['emu1.log', 'emu2.log', 'emu3.log']) {
+              try {
+                const content = fs.readFileSync(f, 'utf8').slice(-3000);
+                body += `### ${f} (last 3000 chars)\n\`\`\`\n${content}\n\`\`\`\n\n`;
+              } catch { body += `### ${f}\n(not found)\n\n`; }
+            }
+
+            // Test output
+            try {
+              const t = fs.readFileSync('test-output.txt', 'utf8');
+              body += `### test-output.txt\n\`\`\`\n${t}\n\`\`\`\n\n`;
+            } catch { body += '### test-output.txt\n(not found)\n\n'; }
+
+            // Emulator logcat
+            try {
+              const l = fs.readFileSync('emulator-logs.txt', 'utf8').slice(-5000);
+              body += `### emulator-logs.txt (last 5000 chars)\n\`\`\`\n${l}\n\`\`\`\n\n`;
+            } catch { body += '### emulator-logs.txt\n(not found)\n\n'; }
+
+            // Truncate to 65000 chars for GitHub API limit
+            if (body.length > 65000) body = body.slice(0, 65000) + '\n\n(truncated)';
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body
+            });
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
@@ -484,6 +553,7 @@ jobs:
           path: |
             test-output.txt
             emulator-logs.txt
+            network-diagnostics.txt
             emu1.log
             emu2.log
             emu3.log
