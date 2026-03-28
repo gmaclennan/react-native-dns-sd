@@ -62,3 +62,12 @@ example/android/build/
 example/android/app/build/
 example/ios/Pods/
 example/ios/build/
+
+# E2E harness app
+e2e-harness/node_modules/
+e2e-harness/android/.gradle/
+e2e-harness/android/build/
+e2e-harness/android/app/build/
+
+# E2E test app
+e2e-test/.gradle/

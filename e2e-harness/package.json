@@ -1,0 +1,25 @@
+{
+  "name": "e2e-harness",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "test:emu1": "npx react-native-harness --harnessRunner emu1",
+    "test:emu2": "npx react-native-harness --harnessRunner emu2",
+    "test:discover": "npx react-native-harness --harnessRunner emu1 tests/discover.test.ts",
+    "test:advertise": "npx react-native-harness --harnessRunner emu2 tests/advertise.test.ts"
+  },
+  "dependencies": {
+    "react": "18.3.1",
+    "react-native": "0.76.5",
+    "react-native-dns-sd": "file:.."
+  },
+  "devDependencies": {
+    "@babel/core": "^7.24.0",
+    "@babel/preset-env": "^7.24.0",
+    "@babel/runtime": "^7.24.0",
+    "@react-native-harness/platform-android": "^1.0.0",
+    "metro-react-native-babel-preset": "^0.77.0",
+    "react-native-harness": "^1.0.0",
+    "typescript": "~5.3.3"
+  }
+}
