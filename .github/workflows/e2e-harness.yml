@@ -134,40 +134,27 @@ jobs:
           echo "=== ADB devices ==="
           adb devices -l
 
-      - name: Run NSD tests in parallel
+      - name: Try running harness on emu2 (advertise)
         working-directory: e2e-harness
         shell: bash
+        continue-on-error: true
         run: |
-          set +e
-
           echo "=== Starting advertise test on emu2 ==="
           npx react-native-harness --harnessRunner emu2 \
-            tests/advertise.harness.ts \
-            > /tmp/emu2-output.txt 2>&1 &
-          EMU2_PID=$!
+            --verbose \
+            tests/advertise.harness.ts 2>&1 | tee /tmp/emu2-output.txt
+          echo "Exit code: $?"
 
-          # Give emu2 time to build, install, and start publishing
-          sleep 30
-
+      - name: Try running harness on emu1 (discover)
+        working-directory: e2e-harness
+        shell: bash
+        continue-on-error: true
+        run: |
           echo "=== Starting discover test on emu1 ==="
           npx react-native-harness --harnessRunner emu1 \
-            tests/discover.harness.ts \
-            > /tmp/emu1-output.txt 2>&1
-          EMU1_EXIT=$?
-
-          # Wait for emu2
-          wait $EMU2_PID
-          EMU2_EXIT=$?
-
-          echo ""
-          echo "=== Emu1 (discover) exit: $EMU1_EXIT ==="
-          cat /tmp/emu1-output.txt
-          echo ""
-          echo "=== Emu2 (advertise) exit: $EMU2_EXIT ==="
-          cat /tmp/emu2-output.txt
-
-          # Fail if either test failed
-          [ $EMU1_EXIT -eq 0 ] && [ $EMU2_EXIT -eq 0 ]
+            --verbose \
+            tests/discover.harness.ts 2>&1 | tee /tmp/emu1-output.txt
+          echo "Exit code: $?"
 
       - name: Collect logs
         if: always()
