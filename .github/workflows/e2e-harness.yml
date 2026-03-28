@@ -48,7 +48,24 @@ jobs:
       - name: Generate Android project (Expo prebuild)
         working-directory: e2e-harness
         shell: bash
-        run: npx expo prebuild --platform android --clean
+        run: |
+          npx expo prebuild --platform android --clean
+          echo "=== Generated settings.gradle ==="
+          cat android/settings.gradle
+
+      - name: Exclude e2e-test from Gradle build
+        shell: bash
+        run: |
+          # The e2e-test directory has its own build.gradle.kts which conflicts
+          # with the harness app's Gradle build. Remove it temporarily during build.
+          if [ -f e2e-test/build.gradle.kts ]; then
+            mv e2e-test/build.gradle.kts e2e-test/build.gradle.kts.bak
+            echo "Renamed e2e-test/build.gradle.kts to prevent Gradle inclusion"
+          fi
+          if [ -f e2e-test/settings.gradle.kts ]; then
+            mv e2e-test/settings.gradle.kts e2e-test/settings.gradle.kts.bak
+            echo "Renamed e2e-test/settings.gradle.kts"
+          fi
 
       - name: Build debug APK
         working-directory: e2e-harness/android

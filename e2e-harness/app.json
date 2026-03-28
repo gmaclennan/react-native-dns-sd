@@ -6,6 +6,9 @@
     "android": {
       "package": "com.nsdtest"
     },
-    "plugins": []
+    "plugins": [],
+    "autolinking": {
+      "exclude": ["e2e-test"]
+    }
   }
 }
