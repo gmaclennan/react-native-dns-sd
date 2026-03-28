@@ -366,27 +366,23 @@ jobs:
 
             echo "=== Configuring $serial (IP: $ip, MAC: $expected_mac) ==="
 
-            # Method 1: Find by MAC address
+            # Find the NIC: try eth1 first (the QEMU virtio-net-pci device),
+            # then fall back to MAC-based detection
             local nic=""
-            if [ -n "$expected_mac" ]; then
+
+            # Check if eth1 exists and has our expected MAC
+            if adb -s "$serial" shell ip link show eth1 2>/dev/null | tr -d '\r' | grep -q "52:54:00"; then
+              nic="eth1"
+              echo "Found QEMU NIC: eth1"
+            else
+              # Fall back: find interface by MAC address
               nic=$(adb -s "$serial" shell ip link show 2>/dev/null \
+                | tr -d '\r' \
                 | grep -B1 "$expected_mac" \
                 | head -1 \
-                | sed 's/^[0-9]*: \([^:@]*\).*/\1/' \
-                | tr -d '[:space:]')
-              [ -n "$nic" ] && echo "Found NIC by MAC: '$nic'"
-            fi
-
-            # Method 2: Find any non-system interface via /sys/class/net/
-            if [ -z "$nic" ]; then
-              echo "MAC detection failed, trying exclusion method..."
-              nic=$(adb -s "$serial" shell ls /sys/class/net/ 2>/dev/null \
-                | tr -s '[:space:]' '\n' \
-                | grep -v -E '^(lo|sit0|ip6tnl0|ip6_vti0|wlan0|radio0|dummy0|tunl0)$' \
-                | grep -v '^$' \
-                | head -1 \
-                | tr -d '[:space:]')
-              [ -n "$nic" ] && echo "Found NIC by exclusion: '$nic'"
+                | sed 's/^[0-9]*: \([^:@]*\).*/\1/')
+              nic=$(echo "$nic" | tr -d '[:space:]')
+              [ -n "$nic" ] && echo "Found NIC by MAC: $nic"
             fi
 
             if [ -z "$nic" ]; then
