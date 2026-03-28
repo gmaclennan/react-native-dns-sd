@@ -69,10 +69,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
       - name: Download APKs
         uses: actions/download-artifact@v4
         with:
           name: test-apks
+
+      - name: Verify APK locations
+        shell: bash
+        run: |
+          echo "=== Finding APKs ==="
+          find . -name "*.apk" -type f
+          echo "=== Checking expected paths ==="
+          ls -la e2e-test/app/build/outputs/apk/debug/app-debug.apk 2>&1 || echo "app APK NOT FOUND at expected path"
+          ls -la e2e-test/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk 2>&1 || echo "test APK NOT FOUND at expected path"
 
       - name: Enable KVM
         run: |
@@ -89,25 +104,40 @@ jobs:
           force-avd-creation: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           script: |
-            set -ex
+            set -x
             echo "=== ADB devices ==="
             adb devices -l
-            echo "=== Finding APKs ==="
-            find . -name "*.apk" -type f
+
+            # Find APKs dynamically
+            APP_APK=$(find . -name "app-debug.apk" -not -name "*androidTest*" -type f | head -1)
+            TEST_APK=$(find . -name "app-debug-androidTest.apk" -type f | head -1)
+
+            echo "App APK: $APP_APK"
+            echo "Test APK: $TEST_APK"
+
+            if [ -z "$APP_APK" ] || [ -z "$TEST_APK" ]; then
+              echo "ERROR: APKs not found!"
+              find . -name "*.apk" -type f
+              exit 1
+            fi
+
             echo "=== Installing app APK ==="
-            adb install -t e2e-test/app/build/outputs/apk/debug/app-debug.apk
+            adb install -t "$APP_APK"
             echo "=== Installing test APK ==="
-            adb install -t e2e-test/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+            adb install -t "$TEST_APK"
             echo "=== Listing packages ==="
-            adb shell pm list packages | grep dnssd || true
+            adb shell pm list packages | grep dnssd || echo "No dnssd packages found"
+
             echo "=== Running nsdRegistrationWorks ==="
             adb shell am instrument -w \
               -e class expo.modules.dnssd.test.NsdDiscoveryTest#nsdRegistrationWorks \
               expo.modules.dnssd.test.test/androidx.test.runner.AndroidJUnitRunner 2>&1 | tee test-output.txt
+
             echo "=== Running nsdDiscoveryStarts ==="
             adb shell am instrument -w \
               -e class expo.modules.dnssd.test.NsdDiscoveryTest#nsdDiscoveryStarts \
               expo.modules.dnssd.test.test/androidx.test.runner.AndroidJUnitRunner 2>&1 | tee -a test-output.txt
+
             echo "=== Done ==="
             cat test-output.txt
 
@@ -348,13 +378,22 @@ jobs:
         shell: bash
         run: |
           export PATH="$ANDROID_HOME/platform-tools:$PATH"
-          echo "=== Finding APKs ==="
-          find . -name "*.apk" -type f
+
+          APP_APK=$(find . -name "app-debug.apk" -not -name "*androidTest*" -type f | head -1)
+          TEST_APK=$(find . -name "app-debug-androidTest.apk" -type f | head -1)
+          echo "App APK: $APP_APK"
+          echo "Test APK: $TEST_APK"
+
+          if [ -z "$APP_APK" ] || [ -z "$TEST_APK" ]; then
+            echo "ERROR: APKs not found!"
+            find . -name "*.apk" -type f
+            exit 1
+          fi
 
           for serial in emulator-5554 emulator-5556 emulator-5558; do
             echo "Installing on $serial..."
-            adb -s "$serial" install -t e2e-test/app/build/outputs/apk/debug/app-debug.apk
-            adb -s "$serial" install -t e2e-test/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+            adb -s "$serial" install -t "$APP_APK"
+            adb -s "$serial" install -t "$TEST_APK"
           done
 
       - name: Start service advertisers on emu2 and emu3
