@@ -126,48 +126,27 @@ class DnsSdModule : Module() {
   }
 
   private fun resolveService(serviceInfo: NsdServiceInfo) {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-      // API 34+: use resolveService with Executor
-      getNsdManager().resolveService(serviceInfo, java.util.concurrent.Executor { it.run() }, object : NsdManager.ServiceInfoCallback {
-        override fun onServiceInfoCallbackRegistrationFailed(errorCode: Int) {
-          Log.e(TAG, "Service info callback registration failed: $errorCode")
+    @Suppress("DEPRECATION")
+    getNsdManager().resolveService(serviceInfo, object : NsdManager.ResolveListener {
+      override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
+        if (errorCode == NsdManager.FAILURE_ALREADY_ACTIVE) {
+          // Retry after a short delay - NSD can only resolve one service at a time
+          android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            resolveService(serviceInfo)
+          }, 100)
+        } else {
+          Log.e(TAG, "Resolve failed for ${serviceInfo.serviceName}: error code $errorCode")
+          sendEvent("onError", mapOf(
+            "error" to "Resolve failed for ${serviceInfo.serviceName} with error code $errorCode"
+          ))
         }
+      }
 
-        override fun onServiceUpdated(info: NsdServiceInfo) {
-          Log.d(TAG, "Service resolved (API 34+): ${info.serviceName}")
-          emitResolvedService(info)
-        }
-
-        override fun onServiceLost() {
-          // handled by discovery listener
-        }
-
-        override fun onServiceInfoCallbackUnregistered() {}
-      })
-    } else {
-      // Legacy resolve
-      @Suppress("DEPRECATION")
-      getNsdManager().resolveService(serviceInfo, object : NsdManager.ResolveListener {
-        override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
-          if (errorCode == NsdManager.FAILURE_ALREADY_ACTIVE) {
-            // Retry after a short delay - NSD can only resolve one service at a time on older APIs
-            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-              resolveService(serviceInfo)
-            }, 100)
-          } else {
-            Log.e(TAG, "Resolve failed for ${serviceInfo.serviceName}: error code $errorCode")
-            sendEvent("onError", mapOf(
-              "error" to "Resolve failed for ${serviceInfo.serviceName} with error code $errorCode"
-            ))
-          }
-        }
-
-        override fun onServiceResolved(info: NsdServiceInfo) {
-          Log.d(TAG, "Service resolved: ${info.serviceName} at ${info.host}:${info.port}")
-          emitResolvedService(info)
-        }
-      })
-    }
+      override fun onServiceResolved(info: NsdServiceInfo) {
+        Log.d(TAG, "Service resolved: ${info.serviceName} at ${info.host}:${info.port}")
+        emitResolvedService(info)
+      }
+    })
   }
 
   private fun emitResolvedService(info: NsdServiceInfo) {
