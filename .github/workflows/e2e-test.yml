@@ -152,23 +152,35 @@ jobs:
         if: always()
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          BODY="## Baseline CI diagnostics (run ${{ github.run_number }})"$'\n\n'
-          for f in test-output.txt baseline-logs.txt; do
-            if [ -f "$f" ]; then
-              CONTENT=$(tail -c 4000 "$f")
-              BODY="${BODY}### ${f}"$'\n'"\`\`\`"$'\n'"${CONTENT}"$'\n'"\`\`\`"$'\n\n'
-            else
-              BODY="${BODY}### ${f}"$'\n'"(not found)"$'\n\n'
-            fi
-          done
+          {
+            echo "## Baseline CI diagnostics (run ${{ github.run_number }})"
+            echo ""
+            for f in test-output.txt baseline-logs.txt; do
+              echo "### $f"
+              echo '```'
+              if [ -f "$f" ]; then tail -c 4000 "$f"; else echo "(not found)"; fi
+              echo '```'
+              echo ""
+            done
+          } > /tmp/pr-comment.md
+
+          REPO="${{ github.repository }}"
           BRANCH="${GITHUB_REF#refs/heads/}"
-          PR_NUMBER=$(gh pr list --head "$BRANCH" --json number --jq '.[0].number' 2>/dev/null || true)
+          PR_DATA=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+            "https://api.github.com/repos/$REPO/pulls?head=${{ github.repository_owner }}:${BRANCH}&state=open")
+          PR_NUMBER=$(echo "$PR_DATA" | jq -r '.[0].number // empty')
+
           if [ -n "$PR_NUMBER" ]; then
-            gh pr comment "$PR_NUMBER" --body "$BODY"
+            BODY=$(cat /tmp/pr-comment.md | jq -Rs .)
+            curl -s -X POST \
+              -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"body\": $BODY}" \
+              "https://api.github.com/repos/$REPO/issues/$PR_NUMBER/comments"
           else
-            echo "No PR found. Body:"; echo "$BODY"
+            echo "No PR found"; cat /tmp/pr-comment.md
           fi
 
       - name: Upload test results
@@ -493,30 +505,54 @@ jobs:
         if: always()
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          # Build comment body from available log files
-          BODY="## Cross-emulator CI diagnostics (run ${{ github.run_number }})"$'\n\n'
+          set -x
+          echo "=== Building diagnostics comment ==="
+          echo "=== Files in working directory ==="
+          ls -la *.log *.txt 2>/dev/null || echo "no log/txt files"
 
-          for f in network-diagnostics.txt emu1.log emu2.log emu3.log test-output.txt emulator-logs.txt; do
-            if [ -f "$f" ]; then
-              CONTENT=$(tail -c 4000 "$f")
-              BODY="${BODY}### ${f}"$'\n'"\`\`\`"$'\n'"${CONTENT}"$'\n'"\`\`\`"$'\n\n'
-            else
-              BODY="${BODY}### ${f}"$'\n'"(not found)"$'\n\n'
-            fi
-          done
+          # Collect all diagnostics into one file
+          {
+            echo "## Cross-emulator CI diagnostics (run ${{ github.run_number }})"
+            echo ""
+            for f in network-diagnostics.txt emu1.log emu2.log emu3.log test-output.txt emulator-logs.txt; do
+              echo "### $f"
+              echo '```'
+              if [ -f "$f" ]; then
+                tail -c 3000 "$f"
+              else
+                echo "(not found)"
+              fi
+              echo '```'
+              echo ""
+            done
+          } > /tmp/pr-comment.md
 
-          # Find PR number from branch
+          echo "=== Comment content ==="
+          cat /tmp/pr-comment.md
+
+          # Post using GitHub API directly
+          REPO="${{ github.repository }}"
+          # Find PR for this branch
           BRANCH="${GITHUB_REF#refs/heads/}"
-          PR_NUMBER=$(gh pr list --head "$BRANCH" --json number --jq '.[0].number' 2>/dev/null || true)
+          echo "Branch: $BRANCH"
+          PR_DATA=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+            "https://api.github.com/repos/$REPO/pulls?head=${{ github.repository_owner }}:${BRANCH}&state=open")
+          PR_NUMBER=$(echo "$PR_DATA" | jq -r '.[0].number // empty')
+          echo "PR number: $PR_NUMBER"
 
           if [ -n "$PR_NUMBER" ]; then
-            echo "Posting comment to PR #$PR_NUMBER"
-            gh pr comment "$PR_NUMBER" --body "$BODY"
+            # Escape for JSON
+            BODY=$(cat /tmp/pr-comment.md | jq -Rs .)
+            curl -s -X POST \
+              -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"body\": $BODY}" \
+              "https://api.github.com/repos/$REPO/issues/$PR_NUMBER/comments"
+            echo "Comment posted to PR #$PR_NUMBER"
           else
             echo "No PR found for branch $BRANCH"
-            echo "$BODY"
           fi
 
       - name: Upload test results
