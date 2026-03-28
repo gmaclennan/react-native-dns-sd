@@ -58,13 +58,19 @@ jobs:
         shell: bash
         run: |
           # expo-modules-core's Compose Compiler 1.5.15 requires Kotlin 1.9.25
-          # but expo prebuild generates build.gradle with Kotlin 1.9.24
-          # Patch it to use 1.9.25
-          if [ -f android/build.gradle ]; then
-            sed -i 's/kotlinVersion = "1.9.24"/kotlinVersion = "1.9.25"/' android/build.gradle
-            echo "Patched Kotlin version in android/build.gradle"
-            grep kotlinVersion android/build.gradle || true
-          fi
+          echo "=== All Gradle files with kotlin version references ==="
+          grep -r "1.9.24\|kotlinVersion\|kotlin_version" android/ --include="*.gradle*" || echo "No matches"
+
+          # Patch all possible formats
+          find android/ -name "*.gradle" -o -name "*.gradle.kts" | while read f; do
+            if grep -q "1.9.24" "$f"; then
+              echo "Patching $f"
+              sed -i 's/1\.9\.24/1.9.25/g' "$f"
+            fi
+          done
+
+          echo "=== After patching ==="
+          grep -r "1.9.2[45]\|kotlinVersion\|kotlin_version" android/ --include="*.gradle*" || echo "No matches"
 
       - name: Exclude e2e-test from Gradle build
         shell: bash
