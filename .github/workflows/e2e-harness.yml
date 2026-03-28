@@ -145,10 +145,9 @@ jobs:
             adb -s "$serial" shell "ip addr add $ip/24 dev eth1" 2>/dev/null \
               || adb -s "$serial" shell "su 0 ip addr add $ip/24 dev eth1"
             adb -s "$serial" shell "ip rule add from all lookup main pref 99" 2>/dev/null || true
-            adb -s "$serial" shell "ip link set wlan0 down" 2>/dev/null \
-              || adb -s "$serial" shell "su 0 ip link set wlan0 down" 2>/dev/null || true
-            adb -s "$serial" shell "ip link set radio0 down" 2>/dev/null \
-              || adb -s "$serial" shell "su 0 ip link set radio0 down" 2>/dev/null || true
+            # NOTE: Do NOT disable wlan0/radio0 for harness tests.
+            # The harness needs SLIRP network to connect Metro dev server.
+            # mDNS will still discover on eth1 since it's active.
           done
 
           echo "=== Network configured ==="

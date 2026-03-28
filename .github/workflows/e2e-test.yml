@@ -369,6 +369,9 @@ jobs:
           configure_emu_network emulator-5556 192.168.77.11 "52:54:00:12:34:57"
           configure_emu_network emulator-5558 192.168.77.12 "52:54:00:12:34:58"
 
+          # Wait for mDNS daemon to notice interface changes
+          sleep 10
+
           echo "Testing ping from emu1 to emu2..."
           adb -s emulator-5554 shell ping -c 2 -W 5 192.168.77.11 || echo "Ping failed"
           echo "Testing ping from emu1 to emu3..."
