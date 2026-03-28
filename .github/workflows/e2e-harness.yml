@@ -96,19 +96,24 @@ jobs:
             echo "$serial booted"
           done
 
-          adb -s emulator-5554 root
-          adb -s emulator-5556 root
+          adb -s emulator-5554 root 2>&1 || true
+          adb -s emulator-5556 root 2>&1 || true
           sleep 2
 
-          # Configure shared NIC
+          # Configure shared NIC (use su 0 for commands requiring root)
           for serial_ip in "emulator-5554 192.168.77.10" "emulator-5556 192.168.77.11"; do
             serial=${serial_ip%% *}
             ip=${serial_ip##* }
-            adb -s "$serial" shell "ip link set eth1 up"
-            adb -s "$serial" shell "ip addr add $ip/24 dev eth1"
+            # Try direct first (works if adb root succeeded), fall back to su 0
+            adb -s "$serial" shell "ip link set eth1 up" 2>/dev/null \
+              || adb -s "$serial" shell "su 0 ip link set eth1 up"
+            adb -s "$serial" shell "ip addr add $ip/24 dev eth1" 2>/dev/null \
+              || adb -s "$serial" shell "su 0 ip addr add $ip/24 dev eth1"
             adb -s "$serial" shell "ip rule add from all lookup main pref 99" 2>/dev/null || true
-            adb -s "$serial" shell "ip link set wlan0 down" 2>/dev/null || true
-            adb -s "$serial" shell "ip link set radio0 down" 2>/dev/null || true
+            adb -s "$serial" shell "ip link set wlan0 down" 2>/dev/null \
+              || adb -s "$serial" shell "su 0 ip link set wlan0 down" 2>/dev/null || true
+            adb -s "$serial" shell "ip link set radio0 down" 2>/dev/null \
+              || adb -s "$serial" shell "su 0 ip link set radio0 down" 2>/dev/null || true
           done
 
           echo "=== Network configured ==="
