@@ -150,40 +150,26 @@ jobs:
 
       - name: Post baseline diagnostics as PR comment
         if: always()
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            let body = '## Baseline CI diagnostics\n\n';
-            for (const f of ['test-output.txt', 'baseline-logs.txt']) {
-              try {
-                const content = fs.readFileSync(f, 'utf8').slice(-5000);
-                body += `### ${f}\n\`\`\`\n${content}\n\`\`\`\n\n`;
-              } catch { body += `### ${f}\n(not found)\n\n`; }
-            }
-            if (body.length > 65000) body = body.slice(0, 65000) + '\n(truncated)';
-            // Find PR number: from event context or by searching for PRs on this branch
-            let prNumber = context.issue?.number;
-            if (!prNumber) {
-              const branch = context.ref.replace('refs/heads/', '');
-              const prs = await github.rest.pulls.list({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                head: `${context.repo.owner}:${branch}`,
-                state: 'open'
-              });
-              if (prs.data.length > 0) prNumber = prs.data[0].number;
-            }
-            if (prNumber) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: prNumber,
-                body
-              });
-            } else {
-              console.log('No PR found, skipping comment. Body:\n' + body);
-            }
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BODY="## Baseline CI diagnostics (run ${{ github.run_number }})"$'\n\n'
+          for f in test-output.txt baseline-logs.txt; do
+            if [ -f "$f" ]; then
+              CONTENT=$(tail -c 4000 "$f")
+              BODY="${BODY}### ${f}"$'\n'"\`\`\`"$'\n'"${CONTENT}"$'\n'"\`\`\`"$'\n\n'
+            else
+              BODY="${BODY}### ${f}"$'\n'"(not found)"$'\n\n'
+            fi
+          done
+          BRANCH="${GITHUB_REF#refs/heads/}"
+          PR_NUMBER=$(gh pr list --head "$BRANCH" --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -n "$PR_NUMBER" ]; then
+            gh pr comment "$PR_NUMBER" --body "$BODY"
+          else
+            echo "No PR found. Body:"; echo "$BODY"
+          fi
 
       - name: Upload test results
         if: always()
@@ -321,51 +307,53 @@ jobs:
           echo "All emulators booted. Devices:"
           adb devices -l
 
-      - name: Dump emulator diagnostics
-        if: always()
-        shell: bash
-        run: |
-          {
-            echo "=== Emulator version ==="
-            emulator -version 2>&1 || true
-
-            echo ""
-            echo "=== Emulator logs (last 50 lines each) ==="
-            for f in emu1.log emu2.log emu3.log; do
-              echo "--- $f ---"
-              tail -50 "$f" 2>/dev/null || echo "(not found)"
-            done
-
-            echo ""
-            echo "=== ADB devices ==="
-            adb devices -l
-
-            echo ""
-            echo "=== Restart adbd as root ==="
-            adb -s emulator-5554 root 2>&1 || true
-            adb -s emulator-5556 root 2>&1 || true
-            adb -s emulator-5558 root 2>&1 || true
-            sleep 2
-
-            for serial in emulator-5554 emulator-5556 emulator-5558; do
-              echo ""
-              echo "=========================================="
-              echo "=== Network info for $serial ==="
-              echo "=========================================="
-              echo "--- ip link show ---"
-              adb -s "$serial" shell ip link show 2>&1 || true
-              echo "--- ip addr show ---"
-              adb -s "$serial" shell ip addr show 2>&1 || true
-              echo "--- /sys/class/net/ ---"
-              adb -s "$serial" shell ls -la /sys/class/net/ 2>&1 || true
-              echo "--- dmesg | grep -i net/virtio ---"
-              adb -s "$serial" shell dmesg 2>/dev/null | grep -i -E "net|eth|virtio" | tail -20 || true
-            done
-          } 2>&1 | tee network-diagnostics.txt
-
       - name: Configure shared network on emulators
         shell: bash
         run: |
+          set +e  # Don't exit on error - we need all diagnostics
+
+          echo "=== Emulator version ==="
+          emulator -version 2>&1 || true
+
+          echo ""
+          echo "=== ADB devices ==="
+          adb devices -l
+
+          echo ""
+          echo "=== Restart adbd as root ==="
+          adb -s emulator-5554 root 2>&1 || true
+          adb -s emulator-5556 root 2>&1 || true
+          adb -s emulator-5558 root 2>&1 || true
+          sleep 2
+
+          DIAG=""
+          for serial in emulator-5554 emulator-5556 emulator-5558; do
+            echo ""
+            echo "=========================================="
+            echo "=== Network info for $serial ==="
+            echo "=========================================="
+            interfaces=$(adb -s "$serial" shell ip link show 2>&1)
+            echo "$interfaces"
+            DIAG="${DIAG}\n=== $serial ip link show ===\n${interfaces}\n"
+            echo "--- /sys/class/net/ ---"
+            netdevs=$(adb -s "$serial" shell ls /sys/class/net/ 2>&1)
+            echo "$netdevs"
+            DIAG="${DIAG}=== $serial /sys/class/net/ ===\n${netdevs}\n"
+          done
+
+          # Save diagnostics for PR comment
+          echo -e "$DIAG" > network-diagnostics.txt
+
+          # Also dump emulator launch logs
+          echo ""
+          echo "=== Emulator logs (last 30 lines each) ==="
+          for f in emu1.log emu2.log emu3.log; do
+            echo "--- $f ---"
+            tail -30 "$f" 2>/dev/null || echo "(not found)"
+          done
+
+          set -e  # Re-enable exit on error
+
           configure_emu_network() {
             local serial=$1
             local ip=$2
@@ -373,22 +361,18 @@ jobs:
 
             echo "=== Configuring $serial (IP: $ip, MAC: $expected_mac) ==="
 
-            # Dynamic NIC detection: find any interface that is NOT a known system one
-            local nic=""
-
             # Method 1: Find by MAC address
+            local nic=""
             if [ -n "$expected_mac" ]; then
               nic=$(adb -s "$serial" shell ip link show 2>/dev/null \
                 | grep -B1 "$expected_mac" \
                 | head -1 \
                 | sed 's/^[0-9]*: \([^:@]*\).*/\1/' \
                 | tr -d '[:space:]')
-              if [ -n "$nic" ]; then
-                echo "Found NIC by MAC: '$nic'"
-              fi
+              [ -n "$nic" ] && echo "Found NIC by MAC: '$nic'"
             fi
 
-            # Method 2: Find any non-system interface
+            # Method 2: Find any non-system interface via /sys/class/net/
             if [ -z "$nic" ]; then
               echo "MAC detection failed, trying exclusion method..."
               nic=$(adb -s "$serial" shell ls /sys/class/net/ 2>/dev/null \
@@ -397,31 +381,20 @@ jobs:
                 | grep -v '^$' \
                 | head -1 \
                 | tr -d '[:space:]')
-              if [ -n "$nic" ]; then
-                echo "Found NIC by exclusion: '$nic'"
-              fi
+              [ -n "$nic" ] && echo "Found NIC by exclusion: '$nic'"
             fi
 
             if [ -z "$nic" ]; then
               echo "ERROR: Could not find second NIC on $serial"
-              echo "Available interfaces:"
-              adb -s "$serial" shell ls /sys/class/net/ 2>&1 || true
               return 1
             fi
 
             echo "Using NIC: $nic on $serial"
-
-            # Configure the shared NIC
             adb -s "$serial" shell "ip link set dev $nic up"
             adb -s "$serial" shell "ip addr add $ip/24 dev $nic"
-
-            # Add routing rule (matches reference)
             adb -s "$serial" shell "ip rule add from all lookup main pref 99" 2>/dev/null || true
-
-            # Disable SLIRP interfaces so mDNS only uses the shared NIC
             adb -s "$serial" shell "ip link set wlan0 down" 2>/dev/null || true
             adb -s "$serial" shell "ip link set radio0 down" 2>/dev/null || true
-
             echo "Network configured on $serial:"
             adb -s "$serial" shell ip addr show "$nic"
           }
@@ -430,11 +403,10 @@ jobs:
           configure_emu_network emulator-5556 192.168.77.11 "52:54:00:12:34:57"
           configure_emu_network emulator-5558 192.168.77.12 "52:54:00:12:34:58"
 
-          # Verify connectivity
           echo "Testing ping from emu1 to emu2..."
-          adb -s emulator-5554 shell ping -c 2 -W 5 192.168.77.11 || echo "Ping failed (may be expected)"
+          adb -s emulator-5554 shell ping -c 2 -W 5 192.168.77.11 || echo "Ping failed"
           echo "Testing ping from emu1 to emu3..."
-          adb -s emulator-5554 shell ping -c 2 -W 5 192.168.77.12 || echo "Ping failed (may be expected)"
+          adb -s emulator-5554 shell ping -c 2 -W 5 192.168.77.12 || echo "Ping failed"
 
       - name: Install APKs on all emulators
         shell: bash
@@ -519,63 +491,33 @@ jobs:
 
       - name: Post diagnostics as PR comment
         if: always()
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            let body = '## Cross-emulator CI diagnostics\n\n';
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Build comment body from available log files
+          BODY="## Cross-emulator CI diagnostics (run ${{ github.run_number }})"$'\n\n'
 
-            // Network diagnostics
-            try {
-              const d = fs.readFileSync('network-diagnostics.txt', 'utf8').slice(-8000);
-              body += `### network-diagnostics.txt\n\`\`\`\n${d}\n\`\`\`\n\n`;
-            } catch { body += '### network-diagnostics.txt\n(not found)\n\n'; }
+          for f in network-diagnostics.txt emu1.log emu2.log emu3.log test-output.txt emulator-logs.txt; do
+            if [ -f "$f" ]; then
+              CONTENT=$(tail -c 4000 "$f")
+              BODY="${BODY}### ${f}"$'\n'"\`\`\`"$'\n'"${CONTENT}"$'\n'"\`\`\`"$'\n\n'
+            else
+              BODY="${BODY}### ${f}"$'\n'"(not found)"$'\n\n'
+            fi
+          done
 
-            // Emulator logs
-            for (const f of ['emu1.log', 'emu2.log', 'emu3.log']) {
-              try {
-                const content = fs.readFileSync(f, 'utf8').slice(-3000);
-                body += `### ${f} (last 3000 chars)\n\`\`\`\n${content}\n\`\`\`\n\n`;
-              } catch { body += `### ${f}\n(not found)\n\n`; }
-            }
+          # Find PR number from branch
+          BRANCH="${GITHUB_REF#refs/heads/}"
+          PR_NUMBER=$(gh pr list --head "$BRANCH" --json number --jq '.[0].number' 2>/dev/null || true)
 
-            // Test output
-            try {
-              const t = fs.readFileSync('test-output.txt', 'utf8');
-              body += `### test-output.txt\n\`\`\`\n${t}\n\`\`\`\n\n`;
-            } catch { body += '### test-output.txt\n(not found)\n\n'; }
-
-            // Emulator logcat
-            try {
-              const l = fs.readFileSync('emulator-logs.txt', 'utf8').slice(-5000);
-              body += `### emulator-logs.txt (last 5000 chars)\n\`\`\`\n${l}\n\`\`\`\n\n`;
-            } catch { body += '### emulator-logs.txt\n(not found)\n\n'; }
-
-            // Truncate to 65000 chars for GitHub API limit
-            if (body.length > 65000) body = body.slice(0, 65000) + '\n\n(truncated)';
-
-            // Find PR number: from event context or by searching for PRs on this branch
-            let prNumber = context.issue?.number;
-            if (!prNumber) {
-              const branch = context.ref.replace('refs/heads/', '');
-              const prs = await github.rest.pulls.list({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                head: `${context.repo.owner}:${branch}`,
-                state: 'open'
-              });
-              if (prs.data.length > 0) prNumber = prs.data[0].number;
-            }
-            if (prNumber) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: prNumber,
-                body
-              });
-            } else {
-              console.log('No PR found, skipping comment. Body:\n' + body);
-            }
+          if [ -n "$PR_NUMBER" ]; then
+            echo "Posting comment to PR #$PR_NUMBER"
+            gh pr comment "$PR_NUMBER" --body "$BODY"
+          else
+            echo "No PR found for branch $BRANCH"
+            echo "$BODY"
+          fi
 
       - name: Upload test results
         if: always()
