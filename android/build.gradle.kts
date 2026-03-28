@@ -8,7 +8,7 @@ version = "0.1.0"
 
 android {
   namespace = "expo.modules.dnssd"
-  compileSdk = 34
+  compileSdk = 35
 
   defaultConfig {
     minSdk = 24
@@ -25,6 +25,5 @@ android {
 }
 
 dependencies {
-  implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.9.25")
   implementation(project(":expo-modules-core"))
 }
