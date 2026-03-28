@@ -118,7 +118,7 @@ jobs:
 
           # Run advertise test on emu2 (background)
           npx react-native-harness --harnessRunner emu2 \
-            tests/advertise.test.ts \
+            tests/advertise.harness.ts \
             2>&1 | tee /tmp/emu2-output.txt &
           EMU2_PID=$!
 
@@ -127,7 +127,7 @@ jobs:
 
           # Run discover test on emu1 (foreground)
           npx react-native-harness --harnessRunner emu1 \
-            tests/discover.test.ts \
+            tests/discover.harness.ts \
             2>&1 | tee /tmp/emu1-output.txt
           EMU1_EXIT=$?
 

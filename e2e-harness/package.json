@@ -9,8 +9,8 @@
     "test:advertise": "npx react-native-harness --harnessRunner emu2 tests/advertise.test.ts"
   },
   "dependencies": {
-    "react": "18.3.1",
-    "react-native": "0.76.5",
+    "react": "19.0.0",
+    "react-native": "0.78.0",
     "react-native-dns-sd": "file:.."
   },
   "devDependencies": {
