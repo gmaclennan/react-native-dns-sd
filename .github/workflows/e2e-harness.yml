@@ -50,6 +50,13 @@ jobs:
         shell: bash
         run: npx expo prebuild --platform android --clean
 
+      - name: Build debug APK
+        working-directory: e2e-harness/android
+        shell: bash
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
       - name: Enable KVM
         shell: bash
         run: |
@@ -119,6 +126,23 @@ jobs:
           echo "=== Network configured ==="
           adb devices -l
           sleep 5
+
+      - name: Install app on emulators
+        shell: bash
+        run: |
+          APP_APK=$(find e2e-harness/android -name "app-debug.apk" -type f | head -1)
+          echo "APK: $APP_APK"
+          if [ -z "$APP_APK" ]; then
+            echo "ERROR: APK not found!"
+            find e2e-harness/android -name "*.apk" -type f
+            exit 1
+          fi
+          for serial in emulator-5554 emulator-5556; do
+            echo "Installing on $serial..."
+            adb -s "$serial" install -t "$APP_APK"
+          done
+          echo "=== Installed packages ==="
+          adb -s emulator-5554 shell pm list packages | grep nsdtest || echo "App not found!"
 
       - name: Verify harness setup
         working-directory: e2e-harness
