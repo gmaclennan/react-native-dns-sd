@@ -8,6 +8,7 @@
     "strict": true,
     "module": "esnext",
     "moduleResolution": "node",
+    "ignoreDeprecations": "5.0",
     "target": "esnext",
     "lib": ["esnext"],
     "jsx": "react-native",
