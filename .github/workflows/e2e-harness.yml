@@ -53,6 +53,19 @@ jobs:
           echo "=== Generated settings.gradle ==="
           cat android/settings.gradle
 
+      - name: Fix Kotlin version for Compose compatibility
+        working-directory: e2e-harness
+        shell: bash
+        run: |
+          # expo-modules-core's Compose Compiler 1.5.15 requires Kotlin 1.9.25
+          # but expo prebuild generates build.gradle with Kotlin 1.9.24
+          # Patch it to use 1.9.25
+          if [ -f android/build.gradle ]; then
+            sed -i 's/kotlinVersion = "1.9.24"/kotlinVersion = "1.9.25"/' android/build.gradle
+            echo "Patched Kotlin version in android/build.gradle"
+            grep kotlinVersion android/build.gradle || true
+          fi
+
       - name: Exclude e2e-test from Gradle build
         shell: bash
         run: |
