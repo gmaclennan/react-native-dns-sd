@@ -493,7 +493,7 @@ jobs:
           export PATH="$ANDROID_HOME/platform-tools:$PATH"
           for serial in emulator-5554 emulator-5556 emulator-5558; do
             echo "=== Logs from $serial ==="
-            adb -s "$serial" logcat -d -s "DnsSdE2ETest:*" "NsdDiscoveryTest:*" "NsdManager:*" 2>/dev/null | tail -200 || true
+            adb -s "$serial" logcat -d -s "DnsSdE2ETest:*" "NsdDiscoveryTest:*" "NsdManager:*" "AndroidRuntime:*" "ActivityManager:*" 2>/dev/null | tail -200 || true
           done | tee emulator-logs.txt
 
       - name: Cleanup emulators

@@ -5,7 +5,7 @@ import android.net.nsd.NsdServiceInfo
 import android.os.Bundle
 import android.util.Log
 import android.widget.TextView
-import androidx.appcompat.app.AppCompatActivity
+import android.app.Activity
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.io.PrintWriter
@@ -18,7 +18,7 @@ import java.net.ServerSocket
  * Pass service name via intent extra:
  *   am start -n expo.modules.dnssd.test/.MainActivity --es service_name "MyService"
  */
-class MainActivity : AppCompatActivity() {
+class MainActivity : Activity() {
 
     companion object {
         private const val TAG = "DnsSdE2ETest"
