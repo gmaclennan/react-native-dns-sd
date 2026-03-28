@@ -55,7 +55,9 @@ jobs:
         shell: bash
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleDebug 2>&1 | tee /tmp/gradle-build.txt
+          echo "=== APK locations ==="
+          find . -name "*.apk" -type f
 
       - name: Enable KVM
         shell: bash
@@ -210,7 +212,7 @@ jobs:
           {
             echo "## RN Harness CI diagnostics (run ${{ github.run_number }})"
             echo ""
-            for f in /tmp/emu1-output.txt /tmp/emu2-output.txt $GITHUB_WORKSPACE/emu1.log $GITHUB_WORKSPACE/emu2.log; do
+            for f in /tmp/gradle-build.txt /tmp/emu1-output.txt /tmp/emu2-output.txt $GITHUB_WORKSPACE/emu1.log $GITHUB_WORKSPACE/emu2.log; do
               echo "### $(basename $f)"
               echo '```'
               if [ -f "$f" ]; then tail -c 3000 "$f"; else echo "(not found)"; fi
